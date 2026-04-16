@@ -1,0 +1,37 @@
+# ---------------------------------------------------------------------------
+# Trigger: Pull Request → runs Terragrunt Plan for all changed environments
+# Fires automatically on any PR targeting main
+# ---------------------------------------------------------------------------
+name: "Pull Request — Plan"
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "modules/**"
+      - "environments/**"
+      - ".github/workflows/**"
+
+concurrency:
+  group: plan-${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan-prod:
+    name: Plan (prod)
+    uses: ./.github/workflows/terragrunt-plan.yaml
+    with:
+      environment: prod
+      working_directory: environments/prod
+    secrets:
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+
+  plan-dev:
+    name: Plan (dev)
+    uses: ./.github/workflows/terragrunt-plan.yaml
+    with:
+      environment: dev
+      working_directory: environments/dev
+    secrets:
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN_DEV }}

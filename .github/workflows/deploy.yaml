@@ -1,0 +1,39 @@
+# ---------------------------------------------------------------------------
+# Trigger: Merge to main → runs Terragrunt Apply
+# Fires automatically when a PR is merged into main
+# ---------------------------------------------------------------------------
+name: "Deploy — Apply"
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "modules/**"
+      - "environments/**"
+
+jobs:
+  apply-dev:
+    name: Apply (dev)
+    concurrency:
+      group: deploy-dev
+      cancel-in-progress: false
+    uses: ./.github/workflows/terragrunt-apply.yaml
+    with:
+      environment: dev
+      working_directory: environments/dev
+    secrets:
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN_DEV }}
+
+  apply-prod:
+    name: Apply (prod)
+    needs: [apply-dev]
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+    uses: ./.github/workflows/terragrunt-apply.yaml
+    with:
+      environment: prod
+      working_directory: environments/prod
+    secrets:
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}

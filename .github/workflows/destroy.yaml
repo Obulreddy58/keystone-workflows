@@ -1,0 +1,35 @@
+# ---------------------------------------------------------------------------
+# Trigger: Manual → runs Terragrunt Destroy
+# Must be triggered manually via GitHub Actions UI
+# ---------------------------------------------------------------------------
+name: "Destroy — Teardown"
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to destroy"
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+      confirm_environment:
+        description: "Type the environment name again to confirm"
+        required: true
+        type: string
+
+concurrency:
+  group: destroy-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  destroy:
+    name: Destroy
+    uses: ./.github/workflows/terragrunt-destroy.yaml
+    with:
+      environment: ${{ github.event.inputs.environment }}
+      working_directory: environments/${{ github.event.inputs.environment }}
+      confirm_environment: ${{ github.event.inputs.confirm_environment }}
+    secrets:
+      AWS_ROLE_ARN: ${{ github.event.inputs.environment == 'prod' && secrets.AWS_ROLE_ARN || secrets.AWS_ROLE_ARN_DEV }}
