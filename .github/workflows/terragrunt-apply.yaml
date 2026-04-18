@@ -29,7 +29,7 @@ on:
         description: "Terragrunt version"
         required: false
         type: string
-        default: "0.67.0"
+        default: "0.66.9"
     secrets:
       AWS_ROLE_ARN:
         required: true
@@ -76,7 +76,4 @@ jobs:
 
       - name: Terragrunt Apply
         working-directory: ${{ inputs.working_directory }}
-        shell: bash
-        run: |
-          terragrunt apply -auto-approve -no-color --terragrunt-non-interactive \
-            --terragrunt-forward-tf-stdout 2>&1
+        run: terragrunt apply -auto-approve -no-color --terragrunt-non-interactive
