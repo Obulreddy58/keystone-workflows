@@ -76,4 +76,4 @@ jobs:
 
       - name: Terragrunt Apply
         working-directory: ${{ inputs.working_directory }}
-        run: terragrunt apply --terragrunt-non-interactive
+        run: terragrunt apply -auto-approve --terragrunt-non-interactive
