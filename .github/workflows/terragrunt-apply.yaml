@@ -78,13 +78,5 @@ jobs:
         working-directory: ${{ inputs.working_directory }}
         shell: bash
         run: |
-          # Find the terraform cache dir and run terraform directly to see full errors
-          TG_CACHE=$(find .terragrunt-cache -name "*.tf" -path "*/vpc/*" -print -quit 2>/dev/null | xargs dirname 2>/dev/null || echo "")
-          if [ -n "$TG_CACHE" ]; then
-            echo "Running terraform directly in: $TG_CACHE"
-            cd "$TG_CACHE"
-            terraform apply -auto-approve -no-color 2>&1
-          else
-            echo "No cache dir found, running via terragrunt"
-            terragrunt apply -auto-approve -no-color --terragrunt-non-interactive --terragrunt-forward-tf-stdout 2>&1
-          fi
+          terragrunt apply -auto-approve -no-color --terragrunt-non-interactive \
+            --terragrunt-forward-tf-stdout 2>&1
