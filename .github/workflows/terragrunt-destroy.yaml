@@ -2,7 +2,6 @@
 # Reusable Workflow: Terragrunt Destroy (for infra-live repos)
 #
 # Called by team repos' destroy.yaml (manual workflow_dispatch).
-# Confirms environment name, then runs terragrunt destroy.
 # ---------------------------------------------------------------------------
 name: Terragrunt Destroy
 
@@ -10,27 +9,32 @@ on:
   workflow_call:
     inputs:
       environment:
-        description: "Target environment (e.g. prod, dev)"
+        description: Environment name such as dev, staging, or prod
         required: true
         type: string
       working_directory:
-        description: "Path to the terragrunt module dir"
+        description: Directory containing the Terragrunt live config
         required: true
         type: string
       confirm_environment:
-        description: "Type the environment name to confirm destruction"
+        description: Type the environment name to confirm destruction
         required: true
         type: string
+      aws_region:
+        description: AWS region to target
+        required: false
+        type: string
+        default: eu-central-1
       terraform_version:
-        description: "Terraform version"
+        description: Terraform version
         required: false
         type: string
-        default: "1.10.0"
+        default: "1.14.0"
       terragrunt_version:
-        description: "Terragrunt version"
+        description: Terragrunt version
         required: false
         type: string
-        default: "0.66.9"
+        default: "0.77.22"
     secrets:
       AWS_ROLE_ARN:
         required: true
@@ -40,14 +44,15 @@ permissions:
   contents: read
 
 env:
-  TF_INPUT: "false"
-  TF_IN_AUTOMATION: "true"
-  TERRAGRUNT_NON_INTERACTIVE: "true"
+  TF_IN_AUTOMATION: true
+  TF_INPUT: false
+  TERRAGRUNT_NON_INTERACTIVE: true
 
 jobs:
-  confirm:
-    name: Confirm Destruction
+  destroy:
+    name: Terragrunt Destroy
     runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
     steps:
       - name: Validate confirmation
         run: |
@@ -57,21 +62,8 @@ jobs:
           fi
           echo "Destruction confirmed for: ${{ inputs.working_directory }} (${{ inputs.environment }})"
 
-  destroy:
-    name: Terragrunt Destroy
-    runs-on: ubuntu-latest
-    needs: [confirm]
-    environment: ${{ inputs.environment }}-destroy
-    steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Configure AWS Credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          role-session-name: tg-destroy-${{ inputs.environment }}
-          aws-region: eu-central-1
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -79,19 +71,30 @@ jobs:
           terraform_version: ${{ inputs.terraform_version }}
           terraform_wrapper: false
 
-      - name: Setup Terragrunt
-        uses: autero1/action-terragrunt@v3
+      - name: Install Terragrunt
+        run: |
+          curl -sL https://github.com/gruntwork-io/terragrunt/releases/download/v${{ inputs.terragrunt_version }}/terragrunt_linux_amd64 -o terragrunt
+          chmod +x terragrunt
+          sudo mv terragrunt /usr/local/bin/terragrunt
+          terragrunt --version
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          terragrunt-version: ${{ inputs.terragrunt_version }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ inputs.aws_region }}
 
-      - name: Terragrunt Init
-        working-directory: ${{ inputs.working_directory }}
-        run: terragrunt init --terragrunt-non-interactive
+      - name: Export AWS_ROLE_ARN
+        run: |
+          ROLE_ARN=$(aws sts get-caller-identity --query RoleArn --output text)
+          echo "AWS_ROLE_ARN=$ROLE_ARN" >> $GITHUB_ENV
 
-      - name: Terragrunt Plan Destroy
+      - name: Terragrunt Init & Destroy Plan
         working-directory: ${{ inputs.working_directory }}
-        run: terragrunt plan -destroy -no-color --terragrunt-non-interactive
+        run: |
+          terragrunt init --terragrunt-non-interactive
+          terragrunt plan -destroy --terragrunt-non-interactive -no-color
 
-      - name: Terragrunt Destroy
+      - name: Destroy infrastructure
         working-directory: ${{ inputs.working_directory }}
-        run: terragrunt destroy -auto-approve -no-color --terragrunt-non-interactive
+        run: terragrunt destroy --terragrunt-non-interactive -auto-approve
