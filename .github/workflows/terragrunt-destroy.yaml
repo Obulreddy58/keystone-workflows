@@ -1,6 +1,8 @@
 # ---------------------------------------------------------------------------
-# Reusable workflow: Terragrunt Destroy
-# Destroys all resources in reverse DAG order (RDS → EKS → VPC)
+# Reusable Workflow: Terragrunt Destroy (for infra-live repos)
+#
+# Called by team repos' destroy.yaml (manual workflow_dispatch).
+# Confirms environment name, then runs terragrunt destroy.
 # ---------------------------------------------------------------------------
 name: Terragrunt Destroy
 
@@ -8,14 +10,17 @@ on:
   workflow_call:
     inputs:
       environment:
-        description: "Target environment (e.g. prod)"
+        description: "Target environment (e.g. prod, dev)"
         required: true
         type: string
       working_directory:
-        description: "Path to the environment folder"
-        required: false
+        description: "Path to the terragrunt module dir"
+        required: true
         type: string
-        default: "environments/prod"
+      confirm_environment:
+        description: "Type the environment name to confirm destruction"
+        required: true
+        type: string
       terraform_version:
         description: "Terraform version"
         required: false
@@ -26,10 +31,6 @@ on:
         required: false
         type: string
         default: "0.67.0"
-      confirm_environment:
-        description: "Type the environment name to confirm destruction"
-        required: true
-        type: string
     secrets:
       AWS_ROLE_ARN:
         required: true
@@ -44,9 +45,6 @@ env:
   TERRAGRUNT_NON_INTERACTIVE: "true"
 
 jobs:
-  # -------------------------------------------------------------------
-  # Safety: Confirm environment name matches
-  # -------------------------------------------------------------------
   confirm:
     name: Confirm Destruction
     runs-on: ubuntu-latest
@@ -57,55 +55,12 @@ jobs:
             echo "::error::Environment confirmation mismatch. Expected '${{ inputs.environment }}', got '${{ inputs.confirm_environment }}'."
             exit 1
           fi
-          echo "✓ Destruction confirmed for environment: ${{ inputs.environment }}"
+          echo "Destruction confirmed for: ${{ inputs.working_directory }} (${{ inputs.environment }})"
 
-  # -------------------------------------------------------------------
-  # Plan Destroy (so we can review what will be removed)
-  # -------------------------------------------------------------------
-  plan-destroy:
-    name: Plan Destroy
-    runs-on: ubuntu-latest
-    needs: [confirm]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Configure AWS Credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          role-session-name: terragrunt-destroy-plan-${{ inputs.environment }}
-          aws-region: us-east-1
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ inputs.terraform_version }}
-          terraform_wrapper: false
-
-      - name: Setup Terragrunt
-        uses: autero1/action-terragrunt@v3
-        with:
-          terragrunt-version: ${{ inputs.terragrunt_version }}
-
-      - name: Terragrunt Init
-        working-directory: ${{ inputs.working_directory }}
-        run: terragrunt run-all init --terragrunt-non-interactive
-
-      - name: Terragrunt Plan Destroy
-        working-directory: ${{ inputs.working_directory }}
-        run: |
-          terragrunt run-all plan -destroy \
-            -no-color \
-            --terragrunt-non-interactive
-
-  # -------------------------------------------------------------------
-  # Destroy: reverse DAG order (RDS → EKS → VPC)
-  # -------------------------------------------------------------------
   destroy:
     name: Terragrunt Destroy
     runs-on: ubuntu-latest
-    needs: [plan-destroy]
+    needs: [confirm]
     environment: ${{ inputs.environment }}-destroy
     steps:
       - name: Checkout
@@ -115,8 +70,8 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          role-session-name: terragrunt-destroy-${{ inputs.environment }}
-          aws-region: us-east-1
+          role-session-name: tg-destroy-${{ inputs.environment }}
+          aws-region: eu-central-1
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -131,13 +86,12 @@ jobs:
 
       - name: Terragrunt Init
         working-directory: ${{ inputs.working_directory }}
-        run: terragrunt run-all init --terragrunt-non-interactive
+        run: terragrunt init --terragrunt-non-interactive
+
+      - name: Terragrunt Plan Destroy
+        working-directory: ${{ inputs.working_directory }}
+        run: terragrunt plan -destroy -no-color --terragrunt-non-interactive
 
       - name: Terragrunt Destroy
         working-directory: ${{ inputs.working_directory }}
-        run: |
-          terragrunt run-all destroy \
-            --terragrunt-non-interactive \
-            --terragrunt-parallelism 1
-          # parallelism=1 ensures strictly sequential reverse DAG:
-          # RDS → EKS → VPC
+        run: terragrunt destroy --terragrunt-non-interactive
