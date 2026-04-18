@@ -1,37 +1,110 @@
 # ---------------------------------------------------------------------------
-# Trigger: Pull Request → runs Terragrunt Plan for all changed environments
-# Fires automatically on any PR targeting main
+# Pull Request — Terragrunt Plan + Auto-Merge
+# Fires on any PR targeting main. Detects changed dirs,
+# runs plan via central reusable workflow, auto-merges on success.
 # ---------------------------------------------------------------------------
-name: "Pull Request — Plan"
+name: "Pull Request — Plan & Auto-Merge"
 
 on:
   pull_request:
-    branches:
-      - main
+    branches: [main]
     paths:
-      - "modules/**"
-      - "environments/**"
+      - "**/*.hcl"
       - ".github/workflows/**"
 
 concurrency:
   group: plan-${{ github.head_ref }}
   cancel-in-progress: true
 
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+
 jobs:
-  plan-prod:
-    name: Plan (prod)
-    uses: ./.github/workflows/terragrunt-plan.yaml
+  # ---------------------------------------------------------------
+  # Detect which {team}/{env}/{region} dirs changed
+  # ---------------------------------------------------------------
+  detect-changes:
+    name: Detect Changed Dirs
+    runs-on: ubuntu-latest
+    outputs:
+      working_dirs: ${{ steps.dirs.outputs.dirs }}
+      environment: ${{ steps.dirs.outputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find changed terragrunt dirs
+        id: dirs
+        run: |
+          # Get changed .hcl files (skip root terragrunt.hcl and hierarchy files)
+          CHANGED=$(git diff --name-only origin/main...HEAD -- '*.hcl' \
+            | grep -E '^[^/]+/[^/]+/[^/]+/' \
+            | xargs -I{} dirname {} \
+            | sort -u)
+
+          if [ -z "$CHANGED" ]; then
+            echo "No terragrunt module dirs changed"
+            echo 'dirs=[]' >> $GITHUB_OUTPUT
+            echo 'environment=' >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Extract environment from first changed path ({team}/{env}/...)
+          ENV=$(echo "$CHANGED" | head -1 | cut -d'/' -f2)
+          echo "environment=$ENV" >> $GITHUB_OUTPUT
+
+          # Build JSON array of dirs
+          JSON="["
+          FIRST=true
+          for d in $CHANGED; do
+            if [ "$FIRST" = true ]; then FIRST=false; else JSON="$JSON,"; fi
+            JSON="$JSON\"$d\""
+          done
+          JSON="$JSON]"
+          echo "dirs=$JSON" >> $GITHUB_OUTPUT
+          echo "Changed dirs: $JSON"
+
+  # ---------------------------------------------------------------
+  # Run Terragrunt Plan via central reusable workflow
+  # ---------------------------------------------------------------
+  plan:
+    name: "Plan: ${{ matrix.dir }}"
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.working_dirs != '[]'
+    strategy:
+      matrix:
+        dir: ${{ fromJson(needs.detect-changes.outputs.working_dirs) }}
+      fail-fast: false
+    uses: Obulreddy58/keystone-workflows/.github/workflows/terragrunt-plan.yaml@main
     with:
-      environment: prod
-      working_directory: environments/prod
+      environment: ${{ needs.detect-changes.outputs.environment }}
+      working_directory: ${{ matrix.dir }}
     secrets:
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
 
-  plan-dev:
-    name: Plan (dev)
-    uses: ./.github/workflows/terragrunt-plan.yaml
-    with:
-      environment: dev
-      working_directory: environments/dev
-    secrets:
-      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN_DEV }}
+  # ---------------------------------------------------------------
+  # Auto-merge PR if all plans succeeded
+  # ---------------------------------------------------------------
+  auto-merge:
+    name: Auto-Merge PR
+    needs: [plan]
+    if: success()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge Pull Request
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.pulls.merge({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              commit_title: `[Keystone] ${context.payload.pull_request.title}`,
+              merge_method: 'squash'
+            });
+            console.log('PR auto-merged after successful plan');
