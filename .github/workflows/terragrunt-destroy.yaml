@@ -30,7 +30,7 @@ on:
         description: "Terragrunt version"
         required: false
         type: string
-        default: "0.67.0"
+        default: "0.66.9"
     secrets:
       AWS_ROLE_ARN:
         required: true
@@ -94,4 +94,4 @@ jobs:
 
       - name: Terragrunt Destroy
         working-directory: ${{ inputs.working_directory }}
-        run: terragrunt destroy --terragrunt-non-interactive
+        run: terragrunt destroy -auto-approve -no-color --terragrunt-non-interactive
