@@ -2,11 +2,8 @@
 # Reusable Workflow: Terragrunt Plan (for infra-live repos)
 #
 # Called by team repos' pull-request.yaml.
-# Runs terragrunt plan in the specified working directory.
+# Runs terragrunt plan with formatting check and Checkov guardrails.
 # Posts plan output as a PR comment.
-#
-# No local modules/ validation — modules are sourced remotely
-# from keystone-modules via git references in terragrunt.hcl.
 # ---------------------------------------------------------------------------
 name: Terragrunt Plan
 
@@ -14,23 +11,28 @@ on:
   workflow_call:
     inputs:
       environment:
-        description: "Target environment (e.g. prod, dev)"
+        description: Environment name such as dev, staging, or prod
         required: true
         type: string
       working_directory:
-        description: "Path to the terragrunt module dir (e.g. platform/prod/eu-central-1/vpc/my-vpc)"
+        description: Directory containing the Terragrunt live config
         required: true
         type: string
+      aws_region:
+        description: AWS region to target
+        required: false
+        type: string
+        default: eu-central-1
       terraform_version:
-        description: "Terraform version"
+        description: Terraform version
         required: false
         type: string
-        default: "1.10.0"
+        default: "1.14.0"
       terragrunt_version:
-        description: "Terragrunt version"
+        description: Terragrunt version
         required: false
         type: string
-        default: "0.66.9"
+        default: "0.77.22"
     secrets:
       AWS_ROLE_ARN:
         required: true
@@ -41,24 +43,17 @@ permissions:
   pull-requests: write
 
 env:
-  TF_INPUT: "false"
-  TF_IN_AUTOMATION: "true"
-  TERRAGRUNT_NON_INTERACTIVE: "true"
+  TF_IN_AUTOMATION: true
+  TF_INPUT: false
+  TERRAGRUNT_NON_INTERACTIVE: true
 
 jobs:
   plan:
     name: Terragrunt Plan
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Configure AWS Credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          role-session-name: tg-plan-${{ inputs.environment }}
-          aws-region: eu-central-1
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -66,20 +61,39 @@ jobs:
           terraform_version: ${{ inputs.terraform_version }}
           terraform_wrapper: false
 
-      - name: Setup Terragrunt
-        uses: autero1/action-terragrunt@v3
+      - name: Install Terragrunt
+        run: |
+          curl -sL https://github.com/gruntwork-io/terragrunt/releases/download/v${{ inputs.terragrunt_version }}/terragrunt_linux_amd64 -o terragrunt
+          chmod +x terragrunt
+          sudo mv terragrunt /usr/local/bin/terragrunt
+          terragrunt --version
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          terragrunt-version: ${{ inputs.terragrunt_version }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ inputs.aws_region }}
 
-      - name: Terragrunt Init
+      - name: Check Terragrunt formatting
         working-directory: ${{ inputs.working_directory }}
-        run: terragrunt init --terragrunt-non-interactive
+        run: terragrunt hclfmt --terragrunt-check
 
-      - name: Terragrunt Plan
+      - name: Terragrunt Init & Plan
         id: plan
         continue-on-error: true
         working-directory: ${{ inputs.working_directory }}
-        run: terragrunt plan -no-color --terragrunt-non-interactive 2>&1 | tee plan_output.txt
+        run: |
+          terragrunt run-all init --terragrunt-non-interactive -reconfigure
+          terragrunt run-all plan -no-color -out tfplan 2>&1 | tee plan_output.txt
+
+      - name: Run Checkov
+        if: steps.plan.outcome == 'success'
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: ${{ inputs.working_directory }}
+          framework: terraform
+          output_format: cli
+          soft_fail: false
 
       - name: Post Plan to PR
         if: always() && github.event_name == 'pull_request'
@@ -88,7 +102,9 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            let plan = fs.readFileSync('${{ inputs.working_directory }}/plan_output.txt', 'utf8');
+            const path = '${{ inputs.working_directory }}/plan_output.txt';
+            let plan = '';
+            try { plan = fs.readFileSync(path, 'utf8'); } catch(e) { plan = 'Plan output not available'; }
 
             const MAX_LEN = 60000;
             if (plan.length > MAX_LEN) {
