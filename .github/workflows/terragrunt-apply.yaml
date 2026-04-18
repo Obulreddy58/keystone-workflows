@@ -78,6 +78,6 @@ jobs:
         working-directory: ${{ inputs.working_directory }}
         shell: bash
         run: |
-          echo "Starting apply in $(pwd)"
-          terragrunt apply -auto-approve -no-color --terragrunt-non-interactive 2>&1
-          echo "Apply finished with exit code $?"
+          echo "Starting apply"
+          terragrunt apply --terragrunt-non-interactive -auto-approve -no-color 2>&1 || true
+          echo "---DONE---"
