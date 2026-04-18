@@ -30,7 +30,7 @@ on:
         description: "Terragrunt version"
         required: false
         type: string
-        default: "0.67.0"
+        default: "0.66.9"
     secrets:
       AWS_ROLE_ARN:
         required: true
