@@ -76,4 +76,11 @@ jobs:
 
       - name: Terragrunt Apply
         working-directory: ${{ inputs.working_directory }}
-        run: terragrunt apply -auto-approve --terragrunt-non-interactive --terragrunt-log-level debug 2>&1
+        run: |
+          terragrunt apply -auto-approve --terragrunt-non-interactive 2>&1 || {
+            echo "=== Terragrunt apply failed ==="
+            echo "Checking for error files..."
+            find . -name "*.txt" -o -name "*.log" | head -5
+            cat .terragrunt-cache/*/apply_output.txt 2>/dev/null || true
+            exit 1
+          }
