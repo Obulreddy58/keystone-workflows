@@ -24,12 +24,17 @@ on:
         description: "Terraform version"
         required: false
         type: string
-        default: "1.10.0"
+        default: "1.14.0"
       terragrunt_version:
-        description: "Terragrunt version"
+        description: Terragrunt version
         required: false
         type: string
-        default: "0.66.9"
+        default: "0.77.22"
+      aws_region:
+        description: AWS region to target
+        required: false
+        type: string
+        default: eu-central-1
     secrets:
       AWS_ROLE_ARN:
         required: true
@@ -52,12 +57,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure AWS Credentials (OIDC)
+      - name: Configure AWS credentials with OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          role-session-name: tg-apply-${{ inputs.environment }}
-          aws-region: eu-central-1
+          aws-region: ${{ inputs.aws_region }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -65,15 +69,18 @@ jobs:
           terraform_version: ${{ inputs.terraform_version }}
           terraform_wrapper: false
 
-      - name: Setup Terragrunt
-        uses: autero1/action-terragrunt@v3
-        with:
-          terragrunt-version: ${{ inputs.terragrunt_version }}
+      - name: Install Terragrunt
+        run: |
+          curl -sL https://github.com/gruntwork-io/terragrunt/releases/download/v${{ inputs.terragrunt_version }}/terragrunt_linux_amd64 -o terragrunt
+          chmod +x terragrunt
+          sudo mv terragrunt /usr/local/bin/terragrunt
+          terragrunt --version
 
-      - name: Terragrunt Init
-        working-directory: ${{ inputs.working_directory }}
-        run: terragrunt init --terragrunt-non-interactive
+      - name: Export AWS_ROLE_ARN
+        run: |
+          ROLE_ARN=$(aws sts get-caller-identity --query RoleArn --output text)
+          echo "AWS_ROLE_ARN=$ROLE_ARN" >> $GITHUB_ENV
 
-      - name: Terragrunt Apply
+      - name: Apply infrastructure
         working-directory: ${{ inputs.working_directory }}
-        run: terragrunt apply -auto-approve -no-color --terragrunt-non-interactive
+        run: terragrunt apply --terragrunt-non-interactive -auto-approve
